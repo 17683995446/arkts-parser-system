@@ -146,41 +146,111 @@ export class ParserService {
 
   /**
    * 预处理内容：移除注释和字符串，避免误识别
+   * 使用逐字符分析方式，更安全可靠
    */
   private preprocessContent(content: string): { cleaned: string, original: string } {
-    let cleaned = content;
+    const result: string[] = new Array(content.length).fill(' ');
     
-    // 1. 移除多行注释 /* ... */
-    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, (match) => {
-      return ' '.repeat(match.length);
-    });
+    let inString: string | null = null; // "'", '"', '`'
+    let inComment: string | null = null; // '//', '/*'
+    let inRegex: boolean = false;
+    let escapeNext = false;
     
-    // 2. 移除单行注释 // ...
-    cleaned = cleaned.replace(/\/\/[^\n]*$/gm, (match) => {
-      return ' '.repeat(match.length);
-    });
+    for (let i = 0; i < content.length; i++) {
+      const char = content[i];
+      const nextChar = i < content.length - 1 ? content[i + 1] : '';
+      
+      // 只有非反引号字符串遇到换行时才强制结束（反引号字符串可以跨多行）
+      if (char === '\n' && inString !== null && inString !== '`') {
+        inString = null;
+      }
+      
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      
+      // 处理转义
+      if (char === '\\' && (inString !== null || inRegex)) {
+        escapeNext = true;
+        continue;
+      }
+      
+      // 优先处理正则表达式结束（非常重要！）
+      if (inRegex && char === '/') {
+        inRegex = false;
+        result[i] = ' '; // 正则内容替换为空格
+        continue;
+      }
+      
+      // 不在正则、字符串、注释的时候才处理注释和正则开始
+      if (!inRegex && inString === null && inComment === null) {
+        // 处理注释
+        if (char === '/' && nextChar === '/') {
+          inComment = '//';
+          i++;
+          continue;
+        }
+        if (char === '/' && nextChar === '*') {
+          inComment = '/*';
+          i++;
+          continue;
+        }
+        
+        // 处理正则表达式开始（只有确定不是结束的时候）
+        if (char === '/') {
+          const possibleRegexStarts = [' ', '\n', '\r', '\t', '(', '[', '{', ',', ';', '=', '?', '!', ':', '&', '|', '+', '-', '*', '/', '%'];
+          let isRegexStart = true;
+          
+          let j = i - 1;
+          while (j >= 0 && (content[j] === ' ' || content[j] === '\t')) {
+            j--;
+          }
+          if (j >= 0 && !possibleRegexStarts.includes(content[j])) {
+            isRegexStart = false;
+          }
+          
+          if (isRegexStart) {
+            inRegex = true;
+            result[i] = ' ';
+            continue;
+          }
+        }
+      }
+      
+      // 处理字符串（只有不在正则和注释的时候）
+      if (!inRegex && inComment === null) {
+        if (inString === null) {
+          if (char === "'") { inString = "'"; continue; }
+          if (char === '"') { inString = '"'; continue; }
+          if (char === '`') { inString = '`'; continue; }
+        } else if (inString === char) {
+          inString = null;
+          continue;
+        }
+      }
+      
+      // 处理多行注释结束
+      if (inComment === '/*' && char === '*' && nextChar === '/') {
+        inComment = null;
+        i++;
+        continue;
+      }
+      
+      // 处理单行注释换行结束
+      if (inComment === '//' && char === '\n') {
+        inComment = null;
+      }
+      
+      // 如果不在字符串、注释或正则中，保留原字符
+      if (inString === null && inComment === null && !inRegex) {
+        result[i] = char;
+      } else {
+        result[i] = ' ';
+      }
+    }
     
-    // 3. 移除单引号字符串
-    cleaned = cleaned.replace(/'([^'\\]|\\.)*'/g, (match) => {
-      return ' '.repeat(match.length);
-    });
-    
-    // 4. 移除双引号字符串
-    cleaned = cleaned.replace(/"([^"\\]|\\.)*"/g, (match) => {
-      return ' '.repeat(match.length);
-    });
-    
-    // 5. 移除反引号字符串
-    cleaned = cleaned.replace(/`([^`\\]|\\.)*`/g, (match) => {
-      return ' '.repeat(match.length);
-    });
-    
-    // 6. 移除正则表达式 (简单处理)
-    cleaned = cleaned.replace(/\/([^\/\\]|\\.)*\/[gimuy]*/g, (match) => {
-      return ' '.repeat(match.length);
-    });
-    
-    return { cleaned, original: content };
+    return { cleaned: result.join(''), original: content };
   }
 
   private parseFileContent(content: string, fileNode: FileNode): void {
@@ -209,6 +279,7 @@ export class ParserService {
 
   /**
    * 查找类和组件位置 - 使用预处理后的内容
+   * 关键改进：装饰器搜索范围限制在前一个类的结束位置之后
    */
   private findClassPositions(cleaned: string, original: string): Array<{
     name: string;
@@ -220,8 +291,13 @@ export class ParserService {
     const results: Array<any> = [];
     const invalidNames = new Set(['method', 'function', 'class', 'type', 'interface', 'in', 'test', 'NotARealClass', 'NotARealComponent']);
     
-    // 在清理后的内容中查找类定义
-    const classPattern = /(?:export\s+)?(class|struct)\s+(\w+)/g;
+    // 在清理后的内容中查找类定义 - 使用边界检查防止假阳性
+    // 修复：支持 Unicode 字符（中文、日文等）使用 \p{L} 匹配任何语言的字母
+    // \p{L} - 任何语言的字母
+    // \p{N} - 任何数字
+    // _ - 下划线
+    // $ - 美元符号
+    const classPattern = /(?:^|\s+)(?:export\s+)?(class|struct)\s+([\p{L}\p{N}_$]+)/gu;
     let match: RegExpExecArray | null;
     
     while ((match = classPattern.exec(cleaned)) !== null) {
@@ -233,11 +309,15 @@ export class ParserService {
       
       const classStart = match.index;
       
+      // 装饰器搜索范围：从前一个类的结束位置之后开始，而不是固定的500字符
+      // 这避免装饰器搜索跨越到前一个类的范围
+      const prevClassEnd = results.length > 0 ? results[results.length - 1].end : 0;
+      const decoratorSearchStart = Math.max(0, Math.max(prevClassEnd, classStart - 200));
+      const decoratorSearchRaw = original.substring(decoratorSearchStart, classStart);
+      const { cleaned: decoratorSearch } = this.preprocessContent(decoratorSearchRaw);
+      
       let isEntry = false;
       let isComponent = false;
-      
-      const decoratorSearchRaw = original.substring(Math.max(0, classStart - 500), classStart);
-      const { cleaned: decoratorSearch } = this.preprocessContent(decoratorSearchRaw);
       
       if (decoratorSearch.includes('@Entry')) {
         isEntry = true;
@@ -253,16 +333,16 @@ export class ParserService {
       let braceCount = 0;
       let braceFound = false;
       let endPos = original.length;
-      let braceIndex = original.indexOf('{', classStart);
+      let braceIndex = cleaned.indexOf('{', classStart);
       
       if (braceIndex !== -1) {
         braceCount = 1;
         braceFound = true;
         
         for (let k = braceIndex + 1; k < original.length; k++) {
-          if (original[k] === '{') {
+          if (cleaned[k] === '{') {
             braceCount++;
-          } else if (original[k] === '}') {
+          } else if (cleaned[k] === '}') {
             braceCount--;
             if (braceCount === 0) {
               endPos = k + 1;
@@ -289,7 +369,11 @@ export class ParserService {
     
     const { cleaned } = this.preprocessContent(classContent);
     
-    const methodPattern1 = /\b(?:public|private|protected|static|async)?\s*(?:async)?\s*(\w+)\s*\([^)]*\)\s*(?::\s*[^;{]+)?\s*{/g;
+    // 修复：async 修饰符只匹配一次，不重复匹配
+    // 问题：async asyncMethod 会被匹配为 "async" + "Method"，而不是一个整体
+    // 解决方案：只保留一个 async?，并确保它不会与方法名冲突
+    // 修复：支持 $ 前缀的方法名，使用负向断言替代 \b
+    const methodPattern1 = /(?<![\w$])(?:public|private|protected|static)?\s*(?:async\s+)?([\w$]+)\s*\([^)]*\)\s*(?::\s*[^;{]+)?\s*{/g;
     let match: RegExpExecArray | null;
     
     while ((match = methodPattern1.exec(cleaned)) !== null) {
@@ -300,7 +384,7 @@ export class ParserService {
       }
     }
     
-    const accessorPattern = /\b(get|set)\s+(\w+)\s*\([^)]*\)\s*(?::\s*[^;{]+)?\s*{/g;
+    const accessorPattern = /\b(get|set)\s+([\w$]+)\s*\([^)]*\)\s*(?::\s*[^;{]+)?\s*{/g;
     while ((match = accessorPattern.exec(cleaned)) !== null) {
       const methodName = match[2];
       if (this.isValidMethodName(methodName, found)) {
@@ -309,7 +393,7 @@ export class ParserService {
       }
     }
     
-    const builderPattern = /@Builder\s+(\w+)/g;
+    const builderPattern = /@Builder\s+([\w$]+)/g;
     while ((match = builderPattern.exec(classContent)) !== null) {
       const builderName = match[1];
       if (this.isValidMethodName(builderName, found)) {
@@ -321,7 +405,7 @@ export class ParserService {
 
   private parseTopLevelFunctions(cleaned: string, fileNode: FileNode, classPositions: any[]): void {
     const found = new Set<string>();
-    const pattern = /(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*(?::\s*[^;{]+)?\s*{/g;
+    const pattern = /(?:export\s+)?(?:async\s+)?function\s+([\w$]+)\s*\([^)]*\)\s*(?::\s*[^;{]+)?\s*{/g;
     let match: RegExpExecArray | null;
     
     while ((match = pattern.exec(cleaned)) !== null) {
@@ -354,7 +438,8 @@ export class ParserService {
     if (this.skipKeywords.has(name)) return false;
     if (name.length < 2) return false;
     if (/^[A-Z][A-Z0-9_]*$/.test(name)) return false;
-    if (name.startsWith('$')) return false;
+    // 移除 $ 前缀检查，保持与类名识别一致性
+    // if (name.startsWith('$')) return false;
     if (/^\d/.test(name)) return false;
     return true;
   }

@@ -1,36 +1,22 @@
 # Dependencies
 node_modules/
-.pnp
-.pnp.js
+package-lock.json
 
 # Build outputs
 dist/
 build/
-.next/
-out/
+*.js.map
 
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# IDE files
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
-.DS_Store
 
-# Test projects
-sample-project/
-edge-case-test-project/
-large-test-project/
-real-harmonyos-project/
-chaos-test-project/
-test-empty-dir/
+# OS
+.DS_Store
+Thumbs.db
 
 # Logs
 *.log
@@ -38,6 +24,55 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Misc
-.cache/
-.temp/
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Testing
+coverage/
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+
+# Test projects (exclude to reduce repo size)
+mega-test-project/
+extreme-test-project/
+extreme-chaos-test-project/
+insane-chaos-test/
+large-test-project/
+gigantic-test-project/
+hyper-gigantic-test/
+round2-mega-test/
+super-extreme-test/
+super-extreme-chaos-final/
+ultimate-chaos-test/
+ultimate-chaos-final/
+ultimate-super-chaos/
+comprehensive-test/
+ultra-mega-test-project/
+real-harmonyos-project/
+real-harmony-app/
+edge-case-test-project/
+chaos-test-project/
+sample-project/
+
+# Temporary test scripts
+create-*.ts
+test-*.ts
+debug-*.ts
+fix-*.ts
+round*.ts
+simple_*.ts
+perf_*.ts
+final_*.ts
+core_unit_tests.ts
+loop_stress_test.ts
+test_preprocess_result.ts
+test_unclosed_string.ts
+test_with_detailed_logs.ts
+test_all_fixes.ts
