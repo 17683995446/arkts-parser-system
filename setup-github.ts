@@ -5,7 +5,7 @@ import https from 'https';
 
 const execAsync = promisify(exec);
 
-const GITHUB_TOKEN = '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';
+const GITHUB_TOKEN = 'REDACTED_GITHUB_TOKEN';
 const REPO_NAME = 'arkts-to-neo4j-parser';
 const USER_EMAIL = '2358384171@qq.com';
 
